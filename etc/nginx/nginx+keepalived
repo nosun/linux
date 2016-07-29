@@ -1,0 +1,339 @@
+## nginx + keepalived 实现高可用
+
+目标：通过keepalived监控nginx，实现nginx的高可用（双机热备）
+
+环境：CentOS release 6.3 (Final)
+Server1：192.168.2.137
+Server2：192.168.2.138
+VIP：192.168.2.139
+
+### 一、安装
+
+1、下载&安装pcre
+
+下载地址：ftp://ftp.csx.cam.ac.uk/pub/software/programming/pcre/
+
+tar zxvf pcre-X.X.tar.gz
+cd pcre-X.X
+./configure
+make &amp;amp;&amp;amp; make install
+ln -s /usr/local/lib/libpcre.so.1 /usr/lib64/
+#这里如果是i686，即/usr/lib/
+tar zxvf pcre-X.X.tar.gz
+cd pcre-X.X
+./configure
+make &amp;amp;&amp;amp; make install
+ln -s /usr/local/lib/libpcre.so.1 /usr/lib64/
+#这里如果是i686，即/usr/lib/
+
+2、下载&安装nginx
+
+下载地址：http://nginx.org/en/download.html
+
+tar zxvf nginx-X.X.tar.gz
+cd nginx-X.X
+./configure --prefix=/usr/local/nginx --with-http_stub_status_module --with-http_ssl_module
+make && make install
+
+tar zxvf nginx-X.X.tar.gz
+cd nginx-X.X
+./configure --prefix=/usr/local/nginx --with-http_stub_status_module --with-http_ssl_module
+make && make install
+
+3、下载&安装keepalived
+
+下载地址：http://www.keepalived.org/download.html
+
+tar zxvf keepalived-X.X.tar.gz
+./configure --prefix=/usr/local/keepalived --disable-fwmark
+make && make install
+
+#将配置文件链接到指定路径
+ln -s /usr/local/keepalived/sbin/keepalived /usr/sbin/
+ln -s /usr/local/keepalived/etc/sysconfig/keepalived /etc/sysconfig/
+ln -s /usr/local/keepalived/etc/rc.d/init.d/keepalived /etc/init.d/
+#复制配置文件模板
+mkdir -p /etc/keepalived
+cp /usr/local/keepalived/etc/keepalived/keepalived.conf /etc/keepalived
+tar zxvf keepalived-X.X.tar.gz
+./configure --prefix=/usr/local/keepalived --disable-fwmark
+make && make install
+
+#将配置文件链接到指定路径
+ln -s /usr/local/keepalived/sbin/keepalived /usr/sbin/
+ln -s /usr/local/keepalived/etc/sysconfig/keepalived /etc/sysconfig/
+ln -s /usr/local/keepalived/etc/rc.d/init.d/keepalived /etc/init.d/
+#复制配置文件模板
+mkdir -p /etc/keepalived
+cp /usr/local/keepalived/etc/keepalived/keepalived.conf /etc/keepalived
+
+二、配置
+
+1、nginx配置
+
+#此处忽略nginx详细配置，详解请看其他文章
+
+2、keepalived配置
+
+示例配置文件如下：
+
+! Configuration File for keepalived
+
+global_defs {
+   notification_email {
+	root@localhost    #收件人
+   }
+   notification_email_from Alexandre.Cassen@firewall.loc   #发件人
+   smtp_server 127.0.0.1    #SMTP服务器地址
+   smtp_connect_timeout 30    #连接超时时间
+   router_id LVS_DEVEL    #运行ID，不唯一
+}
+#以上为邮件相关配置，对于我们来说没有实际意义，暂时指定localhost
+vrrp_script nginx_monitor{
+        #监控脚本存放路径
+	script "/usr/local/keepalived/etc/keepalived/script/nginx_monitor.sh"
+	interval 1   #脚本执行间隔时间（s）
+	#weight -2    #优先级根据返回结果增减
+    }
+vrrp_instance VI_1 {
+    state MASTER    #主机标识
+    interface bond0    #监控网卡
+    virtual_router_id 51   #路由ID，主备需保持一致
+    priority 100    #优先级，主机需高于备机
+    #nopreempt    #不抢占资源，对应参数preempt_delay，默认5分钟
+    advert_int 1    #检查间隔(s)
+    authentication {
+        auth_type PASS   #认证方式为密码
+        auth_pass jokerzhang    #密码
+    }
+    track_script {
+	nginx_monitor    #检测nginx存活的监控脚本
+    }
+    virtual_ipaddress {
+	192.168.2.139    #浮动IP地址，不带掩码默认32.
+    }
+}
+
+! Configuration File for keepalived
+
+global_defs {
+   notification_email {
+	root@localhost    #收件人
+   }
+   notification_email_from Alexandre.Cassen@firewall.loc   #发件人
+   smtp_server 127.0.0.1    #SMTP服务器地址
+   smtp_connect_timeout 30    #连接超时时间
+   router_id LVS_DEVEL    #运行ID，不唯一
+}
+#以上为邮件相关配置，对于我们来说没有实际意义，暂时指定localhost
+vrrp_script nginx_monitor{
+        #监控脚本存放路径
+	script "/usr/local/keepalived/etc/keepalived/script/nginx_monitor.sh"
+	interval 1   #脚本执行间隔时间（s）
+	#weight -2    #优先级根据返回结果增减
+    }
+vrrp_instance VI_1 {
+    state MASTER    #主机标识
+    interface bond0    #监控网卡
+    virtual_router_id 51   #路由ID，主备需保持一致
+    priority 100    #优先级，主机需高于备机
+    #nopreempt    #不抢占资源，对应参数preempt_delay，默认5分钟
+    advert_int 1    #检查间隔(s)
+    authentication {
+        auth_type PASS   #认证方式为密码
+        auth_pass jokerzhang    #密码
+    }
+    track_script {
+	nginx_monitor    #检测nginx存活的监控脚本
+    }
+    virtual_ipaddress {
+	192.168.2.139    #浮动IP地址，不带掩码默认32.
+    }
+}
+
+监控脚本nginx_monitor.sh：
+
+#!/bin/bash
+count_pid=`ps -C nginx --no-header |wc -l`
+if [ $count_pid -eq 0 ]
+then
+	/usr/local/nginx/sbin/nginx
+	sleep 5
+	if [ `ps -C nginx --no-header |wc -l` -eq 0 ]
+	then
+		/etc/init.d/keepalived stop
+		sleep 5
+		if [ `ps -C nginx --no-header|wc -l` -eq 0 ]
+		then
+			killall keepalived
+		fi
+	else
+		echo "Nginx is ok!"
+	fi
+else
+	echo "Nginx is ok!"
+fi
+
+#!/bin/bash
+count_pid=`ps -C nginx --no-header |wc -l`
+if [ $count_pid -eq 0 ]
+then
+	/usr/local/nginx/sbin/nginx
+	sleep 5
+	if [ `ps -C nginx --no-header |wc -l` -eq 0 ]
+	then
+		/etc/init.d/keepalived stop
+		sleep 5
+		if [ `ps -C nginx --no-header|wc -l` -eq 0 ]
+		then
+			killall keepalived
+		fi
+	else
+		echo "Nginx is ok!"
+	fi
+else
+	echo "Nginx is ok!"
+fi
+
+Nginx可以依靠keepalived保持存活，但如果keepalived挂掉，谁要保证它的存活呢？
+有人可能会说，这时候就会主备切换了。但如果主机挂掉之后，备机也挂掉呢？
+这时候需要我们对keepalived也进行监控，此处仅对进程进行监控，大家可以扩展一下，加入邮件、短信告警。
+
+监控脚本keepalived_monitor.sh：
+
+#!/bin/bash
+count_pid=`ps -C keepalived --no-header |wc -l`
+if [ $count_pid -eq 0 ]
+then
+	/etc/init.d/keepalived start
+	sleep 5
+	if [ `ps -C keepalived --no-header |wc -l` -eq 0 ]
+	then
+		echo "keepalived is ok!"
+	else
+		echo "keepalived is failed!"
+	fi
+else
+	echo "keepalived is ok!"
+fi
+
+#!/bin/bash
+count_pid=`ps -C keepalived --no-header |wc -l`
+if [ $count_pid -eq 0 ]
+then
+	/etc/init.d/keepalived start
+	sleep 5
+	if [ `ps -C keepalived --no-header |wc -l` -eq 0 ]
+	then
+		echo "keepalived is ok!"
+	else
+		echo "keepalived is failed!"
+	fi
+else
+	echo "keepalived is ok!"
+fi
+
+该脚本配合crontab,可周期性的检测keepalived服务，如果服务停止，则重新启动。
+
+三、启动服务并验证
+
+1、启动nginx
+
+/usr/local/nginx/sbin/nginx
+ps -ef |grep nginx
+root     35710 39486  0 15:44 pts/0    00:00:00 grep nginx
+root     49343     1  0 Aug25 ?        00:00:00 nginx: master process /usr/local/nginx/sbin/nginx
+nobody   52328 49343  0 09:42 ?        00:03:35 nginx: worker process
+nobody   52329 49343  0 09:42 ?        00:03:18 nginx: worker process
+nobody   52330 49343  0 09:42 ?        00:03:19 nginx: worker process
+nobody   52331 49343  1 09:42 ?        00:03:42 nginx: worker process
+nobody   52332 49343  0 09:42 ?        00:03:18 nginx: worker process
+nobody   52333 49343  0 09:42 ?        00:02:55 nginx: worker process
+nobody   52334 49343  1 09:42 ?        00:03:40 nginx: worker process
+nobody   52335 49343  0 09:42 ?        00:03:12 nginx: worker process
+
+/usr/local/nginx/sbin/nginx
+ps -ef |grep nginx
+root     35710 39486  0 15:44 pts/0    00:00:00 grep nginx
+root     49343     1  0 Aug25 ?        00:00:00 nginx: master process /usr/local/nginx/sbin/nginx
+nobody   52328 49343  0 09:42 ?        00:03:35 nginx: worker process
+nobody   52329 49343  0 09:42 ?        00:03:18 nginx: worker process
+nobody   52330 49343  0 09:42 ?        00:03:19 nginx: worker process
+nobody   52331 49343  1 09:42 ?        00:03:42 nginx: worker process
+nobody   52332 49343  0 09:42 ?        00:03:18 nginx: worker process
+nobody   52333 49343  0 09:42 ?        00:02:55 nginx: worker process
+nobody   52334 49343  1 09:42 ?        00:03:40 nginx: worker process
+nobody   52335 49343  0 09:42 ?        00:03:12 nginx: worker process
+
+nginx的日志文件路径：/usr/local/nginx/logs/
+
+2、启动keepalived
+
+/etc/init.d/keepalived start
+ps -ef |grep keepalived
+root     36174 39486  0 15:45 pts/0    00:00:00 grep keepalived
+root     49672     1  0 Aug25 ?        00:00:01 keepalived -D
+root     49673 49672  0 Aug25 ?        00:00:01 keepalived -D
+root     49674 49672  0 Aug25 ?        00:00:25 keepalived -D
+
+/etc/init.d/keepalived start
+ps -ef |grep keepalived
+root     36174 39486  0 15:45 pts/0    00:00:00 grep keepalived
+root     49672     1  0 Aug25 ?        00:00:01 keepalived -D
+root     49673 49672  0 Aug25 ?        00:00:01 keepalived -D
+root     49674 49672  0 Aug25 ?        00:00:25 keepalived -D
+
+keepalived的日志文件路径：/var/log/messages
+
+3、验证nginx
+通过浏览器访问：http://localhost/
+QQ图片20150826160628
+
+4、验证keepalived
+查看messages内容，以下日志表示浮动IP绑定成功。
+
+Keepalived_vrrp[16845]: VRRP_Instance(VI_1) Transition to MASTER STATE
+Keepalived_vrrp[16845]: VRRP_Instance(VI_1) Entering MASTER STATE
+Keepalived_vrrp[16845]: VRRP_Instance(VI_1) setting protocol VIPs.
+Keepalived_vrrp[16845]: VRRP_Instance(VI_1) Sending gratuitous ARPs on bond0 for 192.168.2.139
+Keepalived_healthcheckers[16844]: Netlink reflector reports IP 192.168.2.139 added
+avahi-daemon[2056]: Registering new address record for 192.168.2.139 on bond0.IPv4.
+Keepalived_vrrp[16845]: VRRP_Instance(VI_1) Sending gratuitous ARPs on bond0 for 192.168.2.139
+
+Keepalived_vrrp[16845]: VRRP_Instance(VI_1) Transition to MASTER STATE
+Keepalived_vrrp[16845]: VRRP_Instance(VI_1) Entering MASTER STATE
+Keepalived_vrrp[16845]: VRRP_Instance(VI_1) setting protocol VIPs.
+Keepalived_vrrp[16845]: VRRP_Instance(VI_1) Sending gratuitous ARPs on bond0 for 192.168.2.139
+Keepalived_healthcheckers[16844]: Netlink reflector reports IP 192.168.2.139 added
+avahi-daemon[2056]: Registering new address record for 192.168.2.139 on bond0.IPv4.
+Keepalived_vrrp[16845]: VRRP_Instance(VI_1) Sending gratuitous ARPs on bond0 for 192.168.2.139
+
+还可以通过命令验证：
+
+#ip a
+bond0: &amp;lt;BROADCAST,MULTICAST,MASTER,UP,LOWER_UP&amp;gt; mtu 1500 qdisc noqueue state UP
+    link/ether ac:16:2d:72:6a:10 brd ff:ff:ff:ff:ff:ff
+    inet 192.168.2.137/24 brd 192.168.2.255 scope global bond0
+    inet 192.168.2.139/32 scope global bond0
+    inet6 fe80::ae16:2dff:fe72:6a10/64 scope link
+       valid_lft forever preferred_lft forever
+
+#ip a
+bond0: &amp;lt;BROADCAST,MULTICAST,MASTER,UP,LOWER_UP&amp;gt; mtu 1500 qdisc noqueue state UP
+    link/ether ac:16:2d:72:6a:10 brd ff:ff:ff:ff:ff:ff
+    inet 192.168.2.137/24 brd 192.168.2.255 scope global bond0
+    inet 192.168.2.139/32 scope global bond0
+    inet6 fe80::ae16:2dff:fe72:6a10/64 scope link
+       valid_lft forever preferred_lft forever
+
+5、主备切换验证
+
+1 通过浮动IP访问后端web服务
+2 停止nginx主机，浮动IP自动切换到备机，通过浮动IP访问后端web服务
+3 停止nginx主机，监控脚本自动启动nginx服务
+4 停止nginx备机，监控脚本自动启动nginx服务
+5 停止主机keepalived，浮动IP自动切换到备机，通过浮动IP访问后端web服务
+6 主机恢复，自动抢占浮动IP
+7 主机断电，备机接管服务
+8 重启备机keepalived服务，主机自动发现备机离线、上线
+9 重启备机nginx服务，主机自动发现备机离线、上线
